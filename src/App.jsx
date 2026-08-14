@@ -1,605 +1,1211 @@
-import React, { useEffect, useMemo, useState } from "react";
-import {
-  Activity,
-  ArrowDownToLine,
-  ArrowUpRight,
-  CheckCircle2,
-  ChevronRight,
-  Clock3,
-  Copy,
-  CreditCard,
-  Globe2,
-  History,
-  KeyRound,
-  LogOut,
-  Menu,
-  MessageSquare,
-  Package,
-  Phone,
-  RefreshCw,
-  Search,
-  Server,
-  ShieldCheck,
-  Smartphone,
-  Sparkles,
-  Wallet,
-  X,
-  Zap
-} from "lucide-react";
-import { supabase } from "./lib/supabase";
+import { useEffect, useState } from "react";
+import { createClient } from "@supabase/supabase-js";
+import "./style.css";
 
-const money = (value = 0) =>
+/* =========================================================
+   SUPABASE
+========================================================= */
+
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+const supabase =
+  supabaseUrl && supabaseAnonKey
+    ? createClient(supabaseUrl, supabaseAnonKey)
+    : null;
+
+/* =========================================================
+   HELPERS
+========================================================= */
+
+const formatRupiah = (value = 0) =>
   new Intl.NumberFormat("id-ID", {
     style: "currency",
     currency: "IDR",
-    maximumFractionDigits: 0
+    maximumFractionDigits: 0,
   }).format(Number(value) || 0);
 
-const api = async (action, options = {}) => {
-  const params = new URLSearchParams({ action, ...(options.params || {}) });
-  const response = await fetch(`/api/nokos?${params.toString()}`, {
-    method: options.method || "GET",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      ...(options.idempotencyKey
-        ? { "X-Idempotency-Key": options.idempotencyKey }
-        : {})
-    },
-    body:
-      options.method && options.method !== "GET"
-        ? new URLSearchParams(options.body || {})
-        : undefined
-  });
+const generateFallbackKey = () => {
+  const chars =
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 
-  const data = await response.json().catch(() => ({
-    success: false,
-    error: "Response server tidak valid."
-  }));
+  let result = "";
 
-  if (!response.ok || data.success === false) {
-    throw new Error(data.error || data.message || "Request gagal.");
+  for (let i = 0; i < 64; i++) {
+    result += chars[Math.floor(Math.random() * chars.length)];
   }
-  return data;
+
+  return result;
 };
 
-function App() {
+/* =========================================================
+   APP
+========================================================= */
+
+export default function App() {
   const [session, setSession] = useState(null);
-  const [authLoading, setAuthLoading] = useState(true);
+  const [profile, setProfile] = useState(null);
+
+  const [loading, setLoading] = useState(true);
+  const [profileLoading, setProfileLoading] = useState(false);
+
   const [page, setPage] = useState("dashboard");
-  const [sidebar, setSidebar] = useState(false);
+
+  const [authMode, setAuthMode] = useState("login");
+
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [name, setName] = useState("");
+
+  const [authLoading, setAuthLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  /* =======================================================
+     CHECK SUPABASE
+  ======================================================= */
 
   useEffect(() => {
     if (!supabase) {
-      setAuthLoading(false);
+      setError(
+        "Supabase belum dikonfigurasi. Periksa VITE_SUPABASE_URL dan VITE_SUPABASE_ANON_KEY."
+      );
+
+      setLoading(false);
       return;
     }
 
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session);
-      setAuthLoading(false);
-    });
+    let mounted = true;
+
+    const init = async () => {
+      const {
+        data: { session },
+        error,
+      } = await supabase.auth.getSession();
+
+      if (!mounted) return;
+
+      if (error) {
+        setError(error.message);
+        setLoading(false);
+        return;
+      }
+
+      setSession(session);
+
+      if (session?.user) {
+        await loadProfile(session.user);
+      }
+
+      setLoading(false);
+    };
+
+    init();
 
     const {
-      data: { subscription }
-    } = supabase.auth.onAuthStateChange((_event, next) => setSession(next));
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      if (!mounted) return;
 
-    return () => subscription.unsubscribe();
+      setSession(session);
+
+      if (session?.user) {
+        await loadProfile(session.user);
+      } else {
+        setProfile(null);
+      }
+    });
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
-  if (authLoading) return <Splash />;
-  if (!session) return <Login />;
+  /* =======================================================
+     LOAD PROFILE
+  ======================================================= */
 
-  return (
-    <div className="app-shell">
-      <Sidebar page={page} setPage={setPage} open={sidebar} setOpen={setSidebar} />
-      <main className="main">
-        <Header setSidebar={setSidebar} />
-        {page === "dashboard" && <Dashboard setPage={setPage} />}
-        {page === "buy" && <BuyNumber />}
-        {page === "activations" && <Activations />}
-        {page === "deposit" && <Deposit />}
-        {page === "history" && <HistoryPage />}
-        {page === "docs" && <Docs />}
-      </main>
-    </div>
-  );
-}
+  const loadProfile = async (user) => {
+    if (!supabase || !user) return;
 
-function Splash() {
-  return <div className="splash"><div className="brand-mark">N</div><strong>NOKOS</strong><span>Memuat dashboard...</span></div>;
-}
+    setProfileLoading(true);
 
-function Login() {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [mode, setMode] = useState("login");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+    try {
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("*")
+        .eq("id", user.id)
+        .maybeSingle();
 
-  if (!supabase) {
+      if (error) {
+        console.error("Profile error:", error);
+        setProfile(null);
+        return;
+      }
+
+      if (data) {
+        setProfile(data);
+      } else {
+        /*
+          Fallback apabila trigger Supabase belum membuat profile.
+          Ini hanya berjalan untuk user yang sedang login.
+        */
+
+        const apiKey = generateFallbackKey();
+
+        const newProfile = {
+          id: user.id,
+          name:
+            user.user_metadata?.name ||
+            user.email?.split("@")[0] ||
+            "User",
+          email: user.email,
+          api_key: apiKey,
+          balance: 0,
+          status: "active",
+          role: "member",
+        };
+
+        const { data: created, error: createError } = await supabase
+          .from("profiles")
+          .insert(newProfile)
+          .select()
+          .single();
+
+        if (createError) {
+          console.error("Create profile error:", createError);
+          setError(
+            "Login berhasil, tetapi profile belum bisa dibuat: " +
+              createError.message
+          );
+          return;
+        }
+
+        setProfile(created);
+      }
+    } finally {
+      setProfileLoading(false);
+    }
+  };
+
+  /* =======================================================
+     LOGIN
+  ======================================================= */
+
+  const handleLogin = async (e) => {
+    e.preventDefault();
+
+    setError("");
+    setMessage("");
+
+    if (!supabase) {
+      setError("Supabase belum dikonfigurasi.");
+      return;
+    }
+
+    if (!email.trim() || !password) {
+      setError("Email dan password wajib diisi.");
+      return;
+    }
+
+    setAuthLoading(true);
+
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      });
+
+      if (error) {
+        console.error("Login error:", error);
+
+        if (error.message.toLowerCase().includes("invalid login")) {
+          setError(
+            "Email atau password salah. Pastikan akun tersebut sudah terdaftar di Supabase."
+          );
+        } else {
+          setError(error.message);
+        }
+
+        return;
+      }
+
+      if (data?.user) {
+        setSession(data.session);
+
+        await loadProfile(data.user);
+
+        setPage("dashboard");
+
+        setMessage("Login berhasil.");
+      }
+    } catch (err) {
+      console.error(err);
+      setError("Terjadi kesalahan saat login.");
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  /* =======================================================
+     REGISTER
+  ======================================================= */
+
+  const handleRegister = async (e) => {
+    e.preventDefault();
+
+    setError("");
+    setMessage("");
+
+    if (!supabase) {
+      setError("Supabase belum dikonfigurasi.");
+      return;
+    }
+
+    if (!name.trim()) {
+      setError("Nama wajib diisi.");
+      return;
+    }
+
+    if (!email.trim()) {
+      setError("Email wajib diisi.");
+      return;
+    }
+
+    if (password.length < 6) {
+      setError("Password minimal 6 karakter.");
+      return;
+    }
+
+    setAuthLoading(true);
+
+    try {
+      const { data, error } = await supabase.auth.signUp({
+        email: email.trim(),
+        password,
+        options: {
+          data: {
+            name: name.trim(),
+          },
+        },
+      });
+
+      if (error) {
+        console.error("Register error:", error);
+        setError(error.message);
+        return;
+      }
+
+      /*
+        Jika email confirmation aktif,
+        session bisa null.
+      */
+
+      if (!data.session) {
+        setMessage(
+          "Pendaftaran berhasil. Silakan cek email untuk konfirmasi akun sebelum login."
+        );
+
+        setAuthMode("login");
+        setPassword("");
+
+        return;
+      }
+
+      /*
+        Jika email confirmation tidak aktif,
+        user langsung login.
+      */
+
+      if (data.user) {
+        await loadProfile(data.user);
+        setPage("dashboard");
+      }
+
+      setMessage("Akun berhasil dibuat.");
+    } catch (err) {
+      console.error(err);
+      setError("Terjadi kesalahan saat membuat akun.");
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  /* =======================================================
+     LOGOUT
+  ======================================================= */
+
+  const handleLogout = async () => {
+    if (!supabase) return;
+
+    await supabase.auth.signOut();
+
+    setSession(null);
+    setProfile(null);
+    setPage("dashboard");
+    setEmail("");
+    setPassword("");
+    setName("");
+    setError("");
+    setMessage("");
+  };
+
+  /* =======================================================
+     COPY
+  ======================================================= */
+
+  const copyText = async (text) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setMessage("Berhasil disalin.");
+    } catch {
+      setError("Tidak dapat menyalin.");
+    }
+  };
+
+  /* =======================================================
+     LOADING
+  ======================================================= */
+
+  if (loading) {
+    return (
+      <div className="splash">
+        <div className="brand-mark">N</div>
+        <strong>NOKOS</strong>
+        <span>Memuat aplikasi...</span>
+      </div>
+    );
+  }
+
+  /* =======================================================
+     AUTH PAGE
+  ======================================================= */
+
+  if (!session) {
     return (
       <div className="auth-page">
+        <div className="auth-glow glow-a" />
+        <div className="auth-glow glow-b" />
+
         <div className="auth-card">
-          <div className="brand-line"><div className="brand-mark">N</div><b>NOKOS</b></div>
-          <h1>Supabase belum dikonfigurasi</h1>
-          <p>Isi VITE_SUPABASE_URL dan VITE_SUPABASE_ANON_KEY di Environment Variables Vercel.</p>
+          <div className="side-brand">
+            <div className="brand-mark">N</div>
+
+            <div>
+              <strong>NOKOS</strong>
+              <small>VIRTUAL NUMBER PLATFORM</small>
+            </div>
+          </div>
+
+          <div className="auth-copy">
+            <span className="eyebrow">
+              {authMode === "login" ? "WELCOME BACK" : "CREATE ACCOUNT"}
+            </span>
+
+            <h1>
+              {authMode === "login"
+                ? "Masuk ke NOKOS"
+                : "Buat akun NOKOS"}
+            </h1>
+
+            <p>
+              {authMode === "login"
+                ? "Masuk untuk mengelola saldo, nomor virtual, OTP, dan API."
+                : "Daftar untuk mulai menggunakan layanan nomor virtual NOKOS."}
+            </p>
+          </div>
+
+          {error && <div className="alert error">{error}</div>}
+
+          {message && (
+            <div className="success-badge">
+              ✓ {message}
+            </div>
+          )}
+
+          <form
+            className="auth-form"
+            onSubmit={
+              authMode === "login"
+                ? handleLogin
+                : handleRegister
+            }
+          >
+            {authMode === "register" && (
+              <label>
+                Nama
+                <input
+                  type="text"
+                  placeholder="Nama kamu"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  autoComplete="name"
+                />
+              </label>
+            )}
+
+            <label>
+              Email
+              <input
+                type="email"
+                placeholder="email@example.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                autoComplete="email"
+              />
+            </label>
+
+            <label>
+              Password
+              <input
+                type="password"
+                placeholder="Minimal 6 karakter"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete={
+                  authMode === "login"
+                    ? "current-password"
+                    : "new-password"
+                }
+              />
+            </label>
+
+            <button
+              className="btn primary full"
+              type="submit"
+              disabled={authLoading}
+            >
+              {authLoading
+                ? "Memproses..."
+                : authMode === "login"
+                ? "Masuk"
+                : "Daftar Sekarang"}
+            </button>
+          </form>
+
+          <button
+            className="text-btn"
+            type="button"
+            onClick={() => {
+              setAuthMode(
+                authMode === "login"
+                  ? "register"
+                  : "login"
+              );
+
+              setError("");
+              setMessage("");
+            }}
+          >
+            {authMode === "login"
+              ? "Belum punya akun? Daftar"
+              : "Sudah punya akun? Login"}
+          </button>
         </div>
       </div>
     );
   }
 
-  const submit = async (e) => {
-    e.preventDefault();
-    setBusy(true);
-    setError("");
+  /* =======================================================
+     DASHBOARD
+  ======================================================= */
 
-    const result =
-      mode === "login"
-        ? await supabase.auth.signInWithPassword({ email, password })
-        : await supabase.auth.signUp({ email, password });
+  const displayName =
+    profile?.name ||
+    session.user.user_metadata?.name ||
+    session.user.email?.split("@")[0] ||
+    "User";
 
-    if (result.error) setError(result.error.message);
-    setBusy(false);
-  };
+  const balance = profile?.balance || 0;
 
-  return (
-    <div className="auth-page">
-      <div className="auth-glow glow-a" />
-      <div className="auth-glow glow-b" />
-      <div className="auth-card">
-        <div className="brand-line">
-          <div className="brand-mark">N</div>
-          <div><b>NOKOS</b><small>Virtual Number Platform</small></div>
-        </div>
-        <div className="auth-copy">
-          <span className="eyebrow">SECURE ACCESS</span>
-          <h1>{mode === "login" ? "Selamat datang kembali." : "Buat akun baru."}</h1>
-          <p>Kelola nomor virtual, OTP, saldo, dan transaksi dari satu dashboard.</p>
-        </div>
+  /* =======================================================
+     SIDEBAR
+  ======================================================= */
 
-        <form onSubmit={submit} className="auth-form">
-          <label>Email<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="nama@email.com" required /></label>
-          <label>Password<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" minLength="6" required /></label>
-          {error && <div className="alert error">{error}</div>}
-          <button className="btn primary full" disabled={busy}>{busy ? "Memproses..." : mode === "login" ? "Masuk ke Dashboard" : "Daftar Sekarang"} <ChevronRight size={17} /></button>
-        </form>
-
-        <button className="text-btn" onClick={() => { setMode(mode === "login" ? "register" : "login"); setError(""); }}>
-          {mode === "login" ? "Belum punya akun? Daftar" : "Sudah punya akun? Login"}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function Sidebar({ page, setPage, open, setOpen }) {
-  const items = [
-    ["dashboard", "Dashboard", Activity],
-    ["buy", "Beli Nomor", Smartphone],
-    ["activations", "Aktivasi", MessageSquare],
-    ["deposit", "Top Up", Wallet],
-    ["history", "Riwayat", History],
-    ["docs", "API Docs", KeyRound]
+  const nav = [
+    {
+      id: "dashboard",
+      label: "Dashboard",
+      icon: "⌂",
+    },
+    {
+      id: "buy",
+      label: "Beli Nomor",
+      icon: "＋",
+    },
+    {
+      id: "deposit",
+      label: "Top Up",
+      icon: "Rp",
+    },
+    {
+      id: "history",
+      label: "Riwayat",
+      icon: "◷",
+    },
+    {
+      id: "docs",
+      label: "API Documentation",
+      icon: "⌘",
+    },
   ];
 
-  const logout = async () => {
-    if (supabase) await supabase.auth.signOut();
-  };
-
   return (
-    <>
-      {open && <div className="overlay" onClick={() => setOpen(false)} />}
-      <aside className={`sidebar ${open ? "open" : ""}`}>
+    <div className="app-shell">
+      {sidebarOpen && (
+        <div
+          className="overlay"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
+      <aside className={`sidebar ${sidebarOpen ? "open" : ""}`}>
         <div className="side-brand">
           <div className="brand-mark">N</div>
-          <div><strong>NOKOS</strong><small>NUMBER PLATFORM</small></div>
+
+          <div>
+            <strong>NOKOS</strong>
+            <small>VIRTUAL NUMBER</small>
+          </div>
         </div>
 
         <div className="side-label">MENU</div>
+
         <nav>
-          {items.map(([id, label, Icon]) => (
-            <button key={id} className={page === id ? "active" : ""} onClick={() => { setPage(id); setOpen(false); }}>
-              <Icon size={18} /> <span>{label}</span>
+          {nav.map((item) => (
+            <button
+              key={item.id}
+              className={page === item.id ? "active" : ""}
+              onClick={() => {
+                setPage(item.id);
+                setSidebarOpen(false);
+                setError("");
+                setMessage("");
+              }}
+            >
+              <span>{item.icon}</span>
+              {item.label}
             </button>
           ))}
         </nav>
 
         <div className="side-status">
-          <div className="status-dot" />
-          <div><b>API Online</b><span>NOKOS API aktif</span></div>
+          <i className="status-dot" />
+
+          <div>
+            <b>System Online</b>
+            <span>API operational</span>
+          </div>
         </div>
 
-        <button className="logout" onClick={logout}><LogOut size={17} /> Keluar</button>
+        <button
+          className="logout"
+          onClick={handleLogout}
+        >
+          ↪
+          <span>Logout</span>
+        </button>
       </aside>
-    </>
-  );
-}
 
-function Header({ setSidebar }) {
-  const [balance, setBalance] = useState(null);
-  const [loading, setLoading] = useState(true);
+      <main className="main">
+        <header className="topbar">
+          <button
+            className="mobile-menu"
+            onClick={() => setSidebarOpen(true)}
+          >
+            ☰
+          </button>
 
-  const load = async () => {
-    try {
-      setLoading(true);
-      const result = await api("getBalance");
-      setBalance(result.data?.balance ?? 0);
-    } catch {
-      setBalance(null);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => { load(); }, []);
-
-  return (
-    <header className="topbar">
-      <button className="mobile-menu" onClick={() => setSidebar(true)}><Menu /></button>
-      <div className="top-title">
-        <span>CONTROL CENTER</span>
-        <h2>NOKOS Dashboard</h2>
-      </div>
-      <div className="top-actions">
-        <button className="icon-btn" onClick={load} title="Refresh"><RefreshCw size={17} className={loading ? "spin" : ""} /></button>
-        <div className="balance-mini">
-          <Wallet size={17} />
-          <div><small>Saldo</small><b>{balance === null ? "—" : money(balance)}</b></div>
-        </div>
-      </div>
-    </header>
-  );
-}
-
-function Dashboard({ setPage }) {
-  const [balance, setBalance] = useState(0);
-  const [services, setServices] = useState([]);
-  const [loading, setLoading] = useState(true);
-
-  const load = async () => {
-    setLoading(true);
-    try {
-      const [b, s] = await Promise.all([api("getBalance"), api("getServices")]);
-      setBalance(b.data?.balance || 0);
-      setServices(s.data || []);
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => { load(); }, []);
-
-  return (
-    <div className="content">
-      <section className="hero-card">
-        <div>
-          <span className="eyebrow">WELCOME TO NOKOS</span>
-          <h1>Nomor virtual,<br /><span>lebih cepat.</span></h1>
-          <p>Beli nomor OTP untuk berbagai layanan dengan stok dan harga real-time.</p>
-          <button className="btn primary" onClick={() => setPage("buy")}>Beli Nomor <ArrowUpRight size={17} /></button>
-        </div>
-        <div className="hero-orb"><Smartphone size={82} strokeWidth={1.2} /></div>
-      </section>
-
-      <div className="stats-grid">
-        <Stat icon={Wallet} label="Saldo Aktif" value={money(balance)} loading={loading} />
-        <Stat icon={Package} label="Total Layanan" value={`${services.length || "—"}`} loading={loading} />
-        <Stat icon={Globe2} label="Negara" value="76+" />
-        <Stat icon={Server} label="Server" value="2 Online" online />
-      </div>
-
-      <div className="section-head"><div><span className="eyebrow">QUICK ACTION</span><h3>Mulai sekarang</h3></div></div>
-      <div className="quick-grid">
-        <Quick icon={Smartphone} title="Beli Nomor" desc="Pilih layanan & negara" onClick={() => setPage("buy")} />
-        <Quick icon={Wallet} title="Top Up Saldo" desc="Bayar dengan QRIS" onClick={() => setPage("deposit")} />
-        <Quick icon={History} title="Riwayat" desc="Lihat transaksi kamu" onClick={() => setPage("history")} />
-      </div>
-    </div>
-  );
-}
-
-function Stat({ icon: Icon, label, value, loading, online }) {
-  return <div className="stat-card"><div className="stat-icon"><Icon size={20} /></div><div><small>{label}</small><strong>{loading ? "..." : value}</strong>{online && <span className="online"><i /> Active</span>}</div></div>;
-}
-
-function Quick({ icon: Icon, title, desc, onClick }) {
-  return <button className="quick-card" onClick={onClick}><div className="quick-icon"><Icon size={21} /></div><div><b>{title}</b><span>{desc}</span></div><ChevronRight size={18} /></button>;
-}
-
-function BuyNumber() {
-  const [services, setServices] = useState([]);
-  const [countries, setCountries] = useState([]);
-  const [service, setService] = useState("wa");
-  const [country, setCountry] = useState("6");
-  const [server, setServer] = useState("s2");
-  const [operator, setOperator] = useState("");
-  const [price, setPrice] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState("");
-  const [order, setOrder] = useState(null);
-
-  useEffect(() => {
-    Promise.all([api("getServices"), api("getCountries")])
-      .then(([s, c]) => {
-        setServices(s.data || []);
-        setCountries(c.data || []);
-      })
-      .catch((e) => setMessage(e.message));
-  }, []);
-
-  const checkPrice = async () => {
-    try {
-      setMessage("");
-      const result = await api("getAvailability", {
-        params: { service, country, server }
-      });
-      setPrice(result.data);
-    } catch (e) { setMessage(e.message); }
-  };
-
-  useEffect(() => { if (service && country) checkPrice(); }, [service, country, server]);
-
-  const buy = async () => {
-    setBusy(true);
-    setMessage("");
-    setOrder(null);
-    try {
-      const result = await api("getNumber", {
-        method: "POST",
-        body: { service, country, operator, server },
-        idempotencyKey: `nokos-${Date.now()}-${Math.random().toString(36).slice(2)}`
-      });
-      setOrder(result.data);
-    } catch (e) {
-      setMessage(e.message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="content">
-      <PageTitle eyebrow="PURCHASE" title="Beli Nomor" desc="Pilih layanan, negara, dan server untuk mendapatkan nomor OTP." />
-      <div className="buy-layout">
-        <div className="panel">
-          <div className="panel-head"><div><b>Konfigurasi Pesanan</b><span>Harga & stok diperbarui otomatis</span></div><Zap size={19} /></div>
-          <div className="form-grid">
-            <label>Layanan
-              <select value={service} onChange={(e) => setService(e.target.value)}>
-                {services.map((x) => <option key={x.code} value={x.code}>{x.name} ({x.code})</option>)}
-                {!services.length && <option value="wa">WhatsApp (wa)</option>}
-              </select>
-            </label>
-            <label>Negara
-              <select value={country} onChange={(e) => setCountry(e.target.value)}>
-                {countries.map((x) => <option key={x.id} value={x.id}>{x.name} {x.prefix}</option>)}
-                {!countries.length && <option value="6">Indonesia +62</option>}
-              </select>
-            </label>
-            <label>Server
-              <select value={server} onChange={(e) => setServer(e.target.value)}>
-                <option value="s2">Server Plus — s2</option>
-                <option value="s1">Server Express — s1</option>
-              </select>
-            </label>
-            <label>Operator <span className="optional">optional</span>
-              <input value={operator} onChange={(e) => setOperator(e.target.value)} placeholder="any / telkomsel / indosat / xl" />
-            </label>
+          <div className="top-title">
+            <span>NOKOS PANEL</span>
+            <h2>{displayName}</h2>
           </div>
-          <div className="availability">
-            <div><span>Harga</span><strong>{price?.price != null ? money(price.price) : "—"}</strong></div>
-            <div><span>Stok tersedia</span><strong>{price?.available ?? "—"}</strong></div>
-            <button className="btn primary" disabled={busy} onClick={buy}>{busy ? "Memproses..." : "Beli Nomor"} <ArrowUpRight size={17} /></button>
+
+          <div className="top-actions">
+            <div className="balance-mini">
+              <div>
+                <small>Saldo</small>
+                <b>{formatRupiah(balance)}</b>
+              </div>
+            </div>
           </div>
-          {message && <div className="alert error">{message}</div>}
-        </div>
+        </header>
 
-        {order && <OrderResult order={order} />}
-      </div>
+        <div className="content">
+          {error && (
+            <div className="alert error">
+              {error}
+            </div>
+          )}
+
+          {message && (
+            <div className="success-badge">
+              ✓ {message}
+            </div>
+          )}
+
+          {/* ===============================================
+              DASHBOARD
+          =============================================== */}
+
+          {page === "dashboard" && (
+            <>
+              <section className="hero-card">
+                <div>
+                  <span className="eyebrow">
+                    VIRTUAL NUMBER PLATFORM
+                  </span>
+
+                  <h1>
+                    Nomor virtual
+                    <br />
+                    <span>lebih mudah.</span>
+                  </h1>
+
+                  <p>
+                    Kelola nomor virtual, OTP, saldo,
+                    dan API dalam satu dashboard.
+                  </p>
+
+                  <div className="action-row">
+                    <button
+                      className="btn primary"
+                      onClick={() => setPage("buy")}
+                    >
+                      Beli Nomor →
+                    </button>
+
+                    <button
+                      className="btn secondary"
+                      onClick={() => setPage("deposit")}
+                    >
+                      Top Up
+                    </button>
+                  </div>
+                </div>
+
+                <div className="hero-orb">
+                  <div className="brand-mark">N</div>
+                </div>
+              </section>
+
+              <div className="stats-grid">
+                <div className="stat-card">
+                  <div className="stat-icon">Rp</div>
+
+                  <div>
+                    <small>Saldo</small>
+                    <strong>{formatRupiah(balance)}</strong>
+                  </div>
+                </div>
+
+                <div className="stat-card">
+                  <div className="stat-icon">#</div>
+
+                  <div>
+                    <small>API Key</small>
+                    <strong>
+                      {profile?.api_key ? "Aktif" : "Belum ada"}
+                    </strong>
+                  </div>
+                </div>
+
+                <div className="stat-card">
+                  <div className="stat-icon">@</div>
+
+                  <div>
+                    <small>Status</small>
+
+                    <span className="online">
+                      ● {profile?.status || "active"}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="stat-card">
+                  <div className="stat-icon">U</div>
+
+                  <div>
+                    <small>Role</small>
+                    <strong>
+                      {profile?.role || "member"}
+                    </strong>
+                  </div>
+                </div>
+              </div>
+
+              <div className="section-head">
+                <span className="eyebrow">QUICK ACTION</span>
+                <h3>Akses cepat</h3>
+              </div>
+
+              <div className="quick-grid">
+                <button
+                  className="quick-card"
+                  onClick={() => setPage("buy")}
+                >
+                  <div className="quick-icon">＋</div>
+
+                  <div>
+                    <b>Beli Nomor</b>
+                    <span>
+                      Order nomor virtual baru
+                    </span>
+                  </div>
+
+                  <span>→</span>
+                </button>
+
+                <button
+                  className="quick-card"
+                  onClick={() => setPage("deposit")}
+                >
+                  <div className="quick-icon">Rp</div>
+
+                  <div>
+                    <b>Top Up Saldo</b>
+                    <span>
+                      Isi saldo menggunakan QRIS
+                    </span>
+                  </div>
+
+                  <span>→</span>
+                </button>
+
+                <button
+                  className="quick-card"
+                  onClick={() => setPage("docs")}
+                >
+                  <div className="quick-icon">⌘</div>
+
+                  <div>
+                    <b>API Documentation</b>
+                    <span>
+                      Integrasikan API NOKOS
+                    </span>
+                  </div>
+
+                  <span>→</span>
+                </button>
+              </div>
+            </>
+          )}
+
+          {/* ===============================================
+              BUY
+          =============================================== */}
+
+          {page === "buy" && (
+            <>
+              <div className="page-title">
+                <span className="eyebrow">
+                  VIRTUAL NUMBER
+                </span>
+
+                <h1>Beli Nomor</h1>
+
+                <p>
+                  Pilih layanan, negara, dan server
+                  untuk mendapatkan nomor virtual.
+                </p>
+              </div>
+
+              <div className="buy-layout">
+                <div className="panel">
+                  <div className="panel-head">
+                    <div>
+                      <b>Order nomor</b>
+                      <span>
+                        Pilih konfigurasi nomor
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="form-grid">
+                    <label>
+                      Service
+                      <select defaultValue="wa">
+                        <option value="wa">
+                          WhatsApp
+                        </option>
+
+                        <option value="tg">
+                          Telegram
+                        </option>
+
+                        <option value="oi">
+                          Tinder
+                        </option>
+                      </select>
+                    </label>
+
+                    <label>
+                      Negara
+                      <select defaultValue="6">
+                        <option value="6">
+                          Indonesia (+62)
+                        </option>
+
+                        <option value="0">
+                          Russia (+7)
+                        </option>
+
+                        <option value="187">
+                          USA (+1)
+                        </option>
+                      </select>
+                    </label>
+
+                    <label>
+                      Server
+                      <select defaultValue="s2">
+                        <option value="s2">
+                          Server Plus
+                        </option>
+
+                        <option value="s1">
+                          Server Express
+                        </option>
+                      </select>
+                    </label>
+
+                    <label>
+                      Operator
+                      <select defaultValue="">
+                        <option value="">
+                          Semua Operator
+                        </option>
+
+                        <option value="telkomsel">
+                          Telkomsel
+                        </option>
+
+                        <option value="indosat">
+                          Indosat
+                        </option>
+
+                        <option value="xl">
+                          XL
+                        </option>
+                      </select>
+                    </label>
+                  </div>
+
+                  <div className="availability">
+                    <div>
+                      <span>Harga</span>
+                      <strong>Rp -</strong>
+                    </div>
+
+                    <div>
+                      <span>Stok</span>
+                      <strong>-</strong>
+                    </div>
+
+                    <button
+                      className="btn primary"
+                      onClick={() =>
+                        setMessage(
+                          "Fitur order API akan kita hubungkan setelah backend NOKOS selesai."
+                        )
+                      }
+                    >
+                      Cek & Beli
+                    </button>
+                  </div>
+                </div>
+
+                <div className="panel order-result">
+                  <span className="eyebrow">
+                    ORDER RESULT
+                  </span>
+
+                  <div className="empty-panel">
+                    <div>◎</div>
+                    <b>Belum ada nomor</b>
+                    <span>
+                      Nomor yang dibeli akan muncul di sini.
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* ===============================================
+              DEPOSIT
+          =============================================== */}
+
+          {page === "deposit" && (
+            <>
+              <div className="page-title">
+                <span className="eyebrow">
+                  BALANCE
+                </span>
+
+                <h1>Top Up Saldo</h1>
+
+                <p>
+                  Isi saldo NOKOS menggunakan QRIS.
+                </p>
+              </div>
+
+              <div className="deposit-layout">
+                <div className="panel">
+                  <div className="panel-head">
+                    <div>
+                      <b>Nominal Top Up</b>
+                      <span>
+                        Minimal Rp10.000
+                      </span>
+                    </div>
+                  </div>
+
+                  <label>
+                    Jumlah
+                    <div className="money-input">
+                      <span>Rp</span>
+
+                      <input
+                        type="number"
+                        min="10000"
+                        placeholder="50000"
+                      />
+                    </div>
+                  </label>
+
+                  <div className="preset-grid">
+                    {[10000, 25000, 50000, 100000].map(
+                      (amount) => (
+                        <button
+                          key={amount}
+                          type="button"
+                          onClick={() => {
+                            setMessage(
+                              `Nominal Rp${amount.toLocaleString(
+                                "id-ID"
+                              )} dipilih.`
+                            );
+                          }}
+                        >
+                          Rp
+                          {amount.toLocaleString("id-ID")}
+                        </button>
+                      )
+                    )}
+                  </div>
+
+                  <button
+                    className="btn primary full"
+                    onClick={() =>
+                      setMessage(
+                        "Integrasi createDeposit akan kita pasang di backend Vercel."
+                      )
+                    }
+                  >
+                    Buat QRIS
+                  </button>
+                </div>
+
+                <div className="panel qr-panel">
+                  <span className="eyebrow">
+                    PAYMENT
+                  </span>
+
+                  <h3>QRIS</h3>
+
+                  <div className="empty-panel">
+                    <div>▦</div>
+                    <b>QR belum dibuat</b>
+                    <span>
+                      QRIS akan muncul setelah transaksi dibuat.
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* ===============================================
+              HISTORY
+          =============================================== */}
+
+          {page === "history" && (
+            <>
+              <div className="page-title">
+                <span className="eyebrow">
+                  TRANSACTIONS
+                </span>
+
+                <h1>Riwayat</h1>
+
+                <p>
+                  Riwayat pembelian nomor dan transaksi saldo.
+                </p>
+              </div>
+
+              <div className="panel">
+                <div className="empty-panel">
+                  <div>◷</div>
+                  <b>Belum ada riwayat</b>
+                  <span>
+                    Transaksi kamu akan muncul di sini.
+                  </span>
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* ===============================================
+              DOCUMENTATION
+          =============================================== */}
+
+          {page === "docs" && (
+            <>
+              <div className="page-title">
+                <span className="eyebrow">
+                  DEVELOPER
+                </span>
+
+                <h1>API Documentation</h1>
+
+                <p>
+                  Integrasikan REST API NOKOS ke website,
+                  bot, aplikasi, atau sistem reseller kamu.
+                </p>
+              </div>
+
+              <div className="docs-grid">
+                <div className="panel">
+                  <div className="doc-title">
+                    <b>Authentication</b>
+                  </div>
+
+                  <p>
+                    Semua request API menggunakan API Key
+                    melalui HTTP Header.
+                  </p>
+
+                  <div className="code">
+                    <button
+                      className="copy-btn"
+                      onClick={() =>
+                        copyText(
+                          "X-API-Key: YOUR_API_KEY"
+                        )
+                      }
+                    >
+                      ⧉
+                    </button>
+
+                    <pre>
+{`X-API-Key: YOUR_API_KEY`}
+                    </pre>
+                  </div>
+                </div>
+
+                <div className="panel">
+                  <div className="doc-title">
+                    <b>Base URL</b>
+                  </div>
+
+                  <div className="code">
+                    <button
+                      className="copy-btn"
+                      onClick={() =>
+                        copyText(
+                          "https://nokos.co.id/api/?action="
+                        )
+                      }
+                    >
+                      ⧉
+                    </button>
+
+                    <pre>
+{`https://nokos.co.id/api/?action=`}
+                    </pre>
+                  </div>
+                </div>
+              </div>
+
+              <div className="panel">
+                <div className="doc-title">
+                  <b>Endpoints</b>
+                </div>
+
+                {[
+                  ["GET", "getBalance", "Cek saldo"],
+                  ["GET", "getServices", "List layanan"],
+                  ["GET", "getCountries", "List negara"],
+                  ["GET", "getPrices", "Cek harga"],
+                  [
+                    "GET",
+                    "getAvailability",
+                    "Cek stok",
+                  ],
+                  [
+                    "POST",
+                    "getNumber",
+                    "Order nomor",
+                  ],
+                  [
+                    "GET",
+                    "getStatus",
+                    "Cek status OTP",
+                  ],
+                  [
+                    "POST",
+                    "setStatus",
+                    "Update status",
+                  ],
+                  [
+                    "POST",
+                    "cancelActivation",
+                    "Cancel nomor",
+                  ],
+                  [
+                    "GET",
+                    "getHistory",
+                    "Riwayat aktivasi",
+                  ],
+                  [
+                    "POST",
+                    "createDeposit",
+                    "Buat QRIS",
+                  ],
+                  [
+                    "GET",
+                    "checkDeposit",
+                    "Cek deposit",
+                  ],
+                ].map(([method, endpoint, description]) => (
+                  <div
+                    className="endpoint"
+                    key={endpoint}
+                  >
+                    <span
+                      className={`method ${
+                        method === "POST"
+                          ? "post"
+                          : ""
+                      }`}
+                    >
+                      {method}
+                    </span>
+
+                    <b>{endpoint}</b>
+
+                    <span>{description}</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      </main>
     </div>
   );
 }
-
-function OrderResult({ order }) {
-  const [status, setStatus] = useState(order?.status || "STATUS_WAIT_CODE");
-  const [otp, setOtp] = useState("");
-  const [checking, setChecking] = useState(false);
-
-  const check = async () => {
-    setChecking(true);
-    try {
-      const result = await api("getStatus", { params: { id: order.activation_id } });
-      setStatus(result.data?.status || "UNKNOWN");
-      setOtp(result.data?.code || "");
-    } catch {}
-    setChecking(false);
-  };
-
-  useEffect(() => {
-    const timer = setInterval(() => {
-      if (status !== "STATUS_OK") check();
-    }, 4000);
-    return () => clearInterval(timer);
-  }, [status, order.activation_id]);
-
-  const setActivationStatus = async (value) => {
-    await api("setStatus", { method: "POST", body: { id: order.activation_id, status: value } }).catch(() => {});
-    check();
-  };
-
-  return (
-    <div className="panel order-result">
-      <div className="success-badge"><CheckCircle2 size={18} /> Nomor berhasil dipesan</div>
-      <span className="eyebrow">ACTIVATION #{order.activation_id}</span>
-      <div className="phone-box"><Phone size={21} /><strong>{order.phone}</strong><CopyButton text={order.phone} /></div>
-      <div className="order-meta">
-        <div><span>Harga</span><b>{money(order.price)}</b></div>
-        <div><span>Status</span><b className="status-text">{status}</b></div>
-        <div><span>Expired</span><b>{order.expires_at || "—"}</b></div>
-      </div>
-      <div className={`otp-box ${otp ? "received" : ""}`}>
-        <span>OTP CODE</span>
-        <strong>{otp || "Menunggu SMS..."}</strong>
-        {otp && <CopyButton text={otp} />}
-      </div>
-      <div className="action-row">
-        <button className="btn secondary" onClick={check} disabled={checking}><RefreshCw size={16} className={checking ? "spin" : ""} /> Refresh</button>
-        <button className="btn secondary" onClick={() => setActivationStatus(3)}>Request SMS</button>
-        <button className="btn danger" onClick={() => setActivationStatus(-1)}>Cancel</button>
-        <button className="btn primary" onClick={() => setActivationStatus(6)}>Selesai</button>
-      </div>
-    </div>
-  );
-}
-
-function CopyButton({ text }) {
-  const [copied, setCopied] = useState(false);
-  return <button className="copy-btn" onClick={() => { navigator.clipboard.writeText(String(text)); setCopied(true); setTimeout(() => setCopied(false), 1200); }}>{copied ? <CheckCircle2 size={16} /> : <Copy size={16} />}</button>;
-}
-
-function Activations() {
-  return <div className="content"><PageTitle eyebrow="LIVE ACTIVATIONS" title="Aktivasi" desc="Pantau nomor dan OTP yang sedang aktif." /><div className="empty-panel"><MessageSquare size={32} /><b>Aktivasi aktif muncul di sini</b><span>Gunakan halaman Beli Nomor untuk membuat aktivasi baru.</span></div></div>;
-}
-
-function Deposit() {
-  const [amount, setAmount] = useState("50000");
-  const [deposit, setDeposit] = useState(null);
-  const [status, setStatus] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  const create = async () => {
-    const value = Number(amount);
-    if (!value || value < 10000 || value > 10000000) {
-      setStatus("Nominal harus Rp10.000 sampai Rp10.000.000.");
-      return;
-    }
-
-    setBusy(true);
-    setStatus("");
-    try {
-      const result = await api("createDeposit", {
-        method: "POST",
-        body: { amount: value },
-        idempotencyKey: `deposit-${Date.now()}`
-      });
-      setDeposit(result.data);
-    } catch (e) {
-      setStatus(e.message);
-    } finally { setBusy(false); }
-  };
-
-  const check = async () => {
-    if (!deposit?.transaction_id) return;
-    try {
-      const result = await api("checkDeposit", { params: { transaction_id: deposit.transaction_id } });
-      setDeposit((old) => ({ ...old, ...result.data }));
-    } catch (e) { setStatus(e.message); }
-  };
-
-  useEffect(() => {
-    if (!deposit?.transaction_id || deposit.status === "paid") return;
-    const timer = setInterval(check, 5000);
-    return () => clearInterval(timer);
-  }, [deposit?.transaction_id, deposit?.status]);
-
-  return (
-    <div className="content">
-      <PageTitle eyebrow="BALANCE" title="Top Up Saldo" desc="Isi saldo NOKOS menggunakan QRIS." />
-      <div className="deposit-layout">
-        <div className="panel">
-          <div className="panel-head"><div><b>Deposit QRIS</b><span>Minimum Rp10.000 · Maksimum Rp10.000.000</span></div><CreditCard size={19} /></div>
-          <label>Nominal Top Up
-            <div className="money-input"><span>Rp</span><input value={amount} onChange={(e) => setAmount(e.target.value.replace(/\D/g, ""))} inputMode="numeric" /></div>
-          </label>
-          <div className="preset-grid">
-            {[10000, 25000, 50000, 100000].map((x) => <button key={x} onClick={() => setAmount(String(x))}>{money(x)}</button>)}
-          </div>
-          <button className="btn primary full" onClick={create} disabled={busy}>{busy ? "Membuat QRIS..." : "Buat QRIS"} <ArrowUpRight size={17} /></button>
-          {status && <div className="alert error">{status}</div>}
-        </div>
-
-        {deposit && <div className="panel qr-panel">
-          <span className="eyebrow">PAYMENT</span>
-          <h3>{deposit.status === "paid" ? "Pembayaran berhasil" : "Scan QRIS"}</h3>
-          {deposit.qris_url && deposit.status !== "paid" && <img className="qr" src={deposit.qris_url} alt="QRIS pembayaran" />}
-          <div className="deposit-info">
-            <span>Transaction ID</span><b>{deposit.transaction_id}</b>
-            <span>Bayar</span><b>{money(deposit.pay_amount)}</b>
-            <span>Status</span><b className={deposit.status === "paid" ? "paid" : ""}>{deposit.status || "pending"}</b>
-          </div>
-          <button className="btn secondary full" onClick={check}><RefreshCw size={16} /> Cek Status</button>
-        </div>}
-      </div>
-    </div>
-  );
-}
-
-function HistoryPage() {
-  const [rows, setRows] = useState([]);
-  const [loading, setLoading] = useState(true);
-
-  const load = async () => {
-    setLoading(true);
-    try {
-      const result = await api("getHistory", { params: { limit: 50, offset: 0 } });
-      setRows(result.data || []);
-    } catch {}
-    setLoading(false);
-  };
-
-  useEffect(() => { load(); }, []);
-
-  return (
-    <div className="content">
-      <PageTitle eyebrow="TRANSACTIONS" title="Riwayat Aktivasi" desc="Daftar transaksi nomor virtual kamu." />
-      <div className="panel table-panel">
-        <div className="table-tools"><div className="search"><Search size={17} /><input placeholder="Cari activation ID / nomor..." /></div><button className="icon-btn" onClick={load}><RefreshCw size={17} /></button></div>
-        <div className="table-wrap">
-          <table><thead><tr><th>Activation</th><th>Service</th><th>Phone</th><th>Harga</th><th>Status</th></tr></thead>
-          <tbody>
-            {loading ? <tr><td colSpan="5" className="center">Memuat...</td></tr> :
-              rows.length ? rows.map((r, i) => <tr key={i}><td>#{r.activation_id || r.id || "—"}</td><td>{r.service || "—"}</td><td>{r.phone || "—"}</td><td>{money(r.price || r.cost || 0)}</td><td><span className="pill">{r.status || "—"}</span></td></tr>) :
-              <tr><td colSpan="5" className="center">Belum ada riwayat.</td></tr>}
-          </tbody></table>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function Docs() {
-  const endpoint = `curl "https://nokos.co.id/api/?action=getBalance" \\
-  -H "X-API-Key: YOUR_API_KEY"`;
-
-  return (
-    <div className="content">
-      <PageTitle eyebrow="DEVELOPER" title="API Documentation" desc="Gunakan proxy backend NOKOS untuk menjaga API Key tetap aman." />
-      <div className="docs-grid">
-        <div className="panel">
-          <div className="doc-title"><ShieldCheck size={20} /><b>Authentication</b></div>
-          <p>Semua request ke API NOKOS menggunakan header <code>X-API-Key</code>. API key asli tidak pernah dikirim dari browser karena request diteruskan melalui Vercel Function.</p>
-          <div className="code"><CopyButton text={endpoint} /><pre>{endpoint}</pre></div>
-        </div>
-        <div className="panel">
-          <div className="doc-title"><Server size={20} /><b>Server Selection</b></div>
-          <div className="server-doc"><b>s2 · Server Plus</b><span>Default, tarif kompetitif dan stok lengkap.</span></div>
-          <div className="server-doc"><b>s1 · Server Express</b><span>Server alternatif untuk membandingkan stok dan response time.</span></div>
-        </div>
-      </div>
-      <div className="panel endpoints">
-        <div className="doc-title"><Package size={20} /><b>Endpoints</b></div>
-        {["getBalance", "getServices", "getCountries", "getPrices", "getAvailability", "getNumber", "getStatus", "setStatus", "cancelActivation", "getHistory", "createDeposit", "checkDeposit"].map((x) => (
-          <div className="endpoint" key={x}><span className={x === "getNumber" || x === "setStatus" || x === "cancelActivation" || x === "createDeposit" ? "method post" : "method"}>{x === "getNumber" || x === "setStatus" || x === "cancelActivation" || x === "createDeposit" ? "POST" : "GET"}</span><b>{x}</b><span>action={x}</span></div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function PageTitle({ eyebrow, title, desc }) {
-  return <div className="page-title"><span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{desc}</p></div>;
-}
-
-export default App;
