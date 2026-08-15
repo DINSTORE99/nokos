@@ -1,1211 +1,1412 @@
-import { useEffect, useState } from "react";
-import { createClient } from "@supabase/supabase-js";
+import { useEffect, useMemo, useState } from "react";
+import {
+  Menu,
+  X,
+  ShoppingCart,
+  Wallet,
+  Package,
+  RefreshCw,
+  CheckCircle2,
+  Clock3,
+  Copy,
+  Search,
+  Server,
+  Smartphone,
+  ShieldCheck,
+  Zap,
+  Ban,
+  ChevronDown,
+  Globe2,
+  Activity,
+  ArrowRight,
+  CircleDollarSign,
+} from "lucide-react";
+
 import "./style.css";
 
-/* =========================================================
-   SUPABASE
-========================================================= */
+const formatRupiah = (value) => {
+  const number = Number(value || 0);
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-
-const supabase =
-  supabaseUrl && supabaseAnonKey
-    ? createClient(supabaseUrl, supabaseAnonKey)
-    : null;
-
-/* =========================================================
-   HELPERS
-========================================================= */
-
-const formatRupiah = (value = 0) =>
-  new Intl.NumberFormat("id-ID", {
+  return new Intl.NumberFormat("id-ID", {
     style: "currency",
     currency: "IDR",
     maximumFractionDigits: 0,
-  }).format(Number(value) || 0);
-
-const generateFallbackKey = () => {
-  const chars =
-    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-
-  let result = "";
-
-  for (let i = 0; i < 64; i++) {
-    result += chars[Math.floor(Math.random() * chars.length)];
-  }
-
-  return result;
+  }).format(number);
 };
 
-/* =========================================================
-   APP
-========================================================= */
+const api = async (url, options = {}) => {
+  const response = await fetch(url, options);
 
-export default function App() {
-  const [session, setSession] = useState(null);
-  const [profile, setProfile] = useState(null);
+  const text = await response.text();
 
-  const [loading, setLoading] = useState(true);
-  const [profileLoading, setProfileLoading] = useState(false);
+  let data;
 
-  const [page, setPage] = useState("dashboard");
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(
+      `Server mengembalikan response tidak valid (${response.status})`
+    );
+  }
 
-  const [authMode, setAuthMode] = useState("login");
+  if (!response.ok || data.success === false) {
+    throw new Error(
+      data.message ||
+        data.error ||
+        `Request gagal (${response.status})`
+    );
+  }
 
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [name, setName] = useState("");
+  return data;
+};
 
-  const [authLoading, setAuthLoading] = useState(false);
+function App() {
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  const [services, setServices] = useState([]);
+  const [countries, setCountries] = useState([]);
+
+  const [service, setService] = useState("wa");
+  const [country, setCountry] = useState("6");
+  const [server, setServer] = useState("s2");
+  const [operator, setOperator] = useState("");
+
+  const [price, setPrice] = useState(null);
+  const [loadingPrice, setLoadingPrice] = useState(false);
+
+  const [ordering, setOrdering] = useState(false);
+  const [order, setOrder] = useState(null);
+
+  const [status, setStatus] = useState(null);
+  const [checkingStatus, setCheckingStatus] = useState(false);
+
+  const [balance, setBalance] = useState(null);
+
+  const [search, setSearch] = useState("");
+
   const [error, setError] = useState("");
-  const [message, setMessage] = useState("");
+  const [notice, setNotice] = useState("");
 
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-
-  /* =======================================================
-     CHECK SUPABASE
-  ======================================================= */
+  // =========================
+  // LOAD SERVICES + COUNTRIES
+  // =========================
 
   useEffect(() => {
-    if (!supabase) {
-      setError(
-        "Supabase belum dikonfigurasi. Periksa VITE_SUPABASE_URL dan VITE_SUPABASE_ANON_KEY."
-      );
-
-      setLoading(false);
-      return;
-    }
-
-    let mounted = true;
-
-    const init = async () => {
-      const {
-        data: { session },
-        error,
-      } = await supabase.auth.getSession();
-
-      if (!mounted) return;
-
-      if (error) {
-        setError(error.message);
-        setLoading(false);
-        return;
-      }
-
-      setSession(session);
-
-      if (session?.user) {
-        await loadProfile(session.user);
-      }
-
-      setLoading(false);
-    };
-
-    init();
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      if (!mounted) return;
-
-      setSession(session);
-
-      if (session?.user) {
-        await loadProfile(session.user);
-      } else {
-        setProfile(null);
-      }
-    });
-
-    return () => {
-      mounted = false;
-      subscription.unsubscribe();
-    };
+    loadInitialData();
   }, []);
 
-  /* =======================================================
-     LOAD PROFILE
-  ======================================================= */
-
-  const loadProfile = async (user) => {
-    if (!supabase || !user) return;
-
-    setProfileLoading(true);
-
+  async function loadInitialData() {
     try {
-      const { data, error } = await supabase
-        .from("profiles")
-        .select("*")
-        .eq("id", user.id)
-        .maybeSingle();
+      setError("");
 
-      if (error) {
-        console.error("Profile error:", error);
-        setProfile(null);
-        return;
-      }
+      const [servicesRes, countriesRes] = await Promise.all([
+        api("/api/services"),
+        api("/api/countries"),
+      ]);
 
-      if (data) {
-        setProfile(data);
-      } else {
-        /*
-          Fallback apabila trigger Supabase belum membuat profile.
-          Ini hanya berjalan untuk user yang sedang login.
-        */
+      setServices(servicesRes.data || []);
+      setCountries(countriesRes.data || []);
 
-        const apiKey = generateFallbackKey();
-
-        const newProfile = {
-          id: user.id,
-          name:
-            user.user_metadata?.name ||
-            user.email?.split("@")[0] ||
-            "User",
-          email: user.email,
-          api_key: apiKey,
-          balance: 0,
-          status: "active",
-          role: "member",
-        };
-
-        const { data: created, error: createError } = await supabase
-          .from("profiles")
-          .insert(newProfile)
-          .select()
-          .single();
-
-        if (createError) {
-          console.error("Create profile error:", createError);
-          setError(
-            "Login berhasil, tetapi profile belum bisa dibuat: " +
-              createError.message
-          );
-          return;
-        }
-
-        setProfile(created);
-      }
-    } finally {
-      setProfileLoading(false);
-    }
-  };
-
-  /* =======================================================
-     LOGIN
-  ======================================================= */
-
-  const handleLogin = async (e) => {
-    e.preventDefault();
-
-    setError("");
-    setMessage("");
-
-    if (!supabase) {
-      setError("Supabase belum dikonfigurasi.");
-      return;
-    }
-
-    if (!email.trim() || !password) {
-      setError("Email dan password wajib diisi.");
-      return;
-    }
-
-    setAuthLoading(true);
-
-    try {
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email: email.trim(),
-        password,
-      });
-
-      if (error) {
-        console.error("Login error:", error);
-
-        if (error.message.toLowerCase().includes("invalid login")) {
-          setError(
-            "Email atau password salah. Pastikan akun tersebut sudah terdaftar di Supabase."
-          );
-        } else {
-          setError(error.message);
-        }
-
-        return;
-      }
-
-      if (data?.user) {
-        setSession(data.session);
-
-        await loadProfile(data.user);
-
-        setPage("dashboard");
-
-        setMessage("Login berhasil.");
+      if (!service && servicesRes.data?.length) {
+        setService(servicesRes.data[0].code);
       }
     } catch (err) {
-      console.error(err);
-      setError("Terjadi kesalahan saat login.");
-    } finally {
-      setAuthLoading(false);
+      setError(err.message);
     }
-  };
+  }
 
-  /* =======================================================
-     REGISTER
-  ======================================================= */
+  // =========================
+  // LOAD BALANCE
+  // =========================
 
-  const handleRegister = async (e) => {
-    e.preventDefault();
-
-    setError("");
-    setMessage("");
-
-    if (!supabase) {
-      setError("Supabase belum dikonfigurasi.");
-      return;
-    }
-
-    if (!name.trim()) {
-      setError("Nama wajib diisi.");
-      return;
-    }
-
-    if (!email.trim()) {
-      setError("Email wajib diisi.");
-      return;
-    }
-
-    if (password.length < 6) {
-      setError("Password minimal 6 karakter.");
-      return;
-    }
-
-    setAuthLoading(true);
-
+  async function loadBalance() {
     try {
-      const { data, error } = await supabase.auth.signUp({
-        email: email.trim(),
-        password,
-        options: {
-          data: {
-            name: name.trim(),
-          },
-        },
-      });
+      const result = await api("/api/balance");
 
-      if (error) {
-        console.error("Register error:", error);
-        setError(error.message);
-        return;
-      }
-
-      /*
-        Jika email confirmation aktif,
-        session bisa null.
-      */
-
-      if (!data.session) {
-        setMessage(
-          "Pendaftaran berhasil. Silakan cek email untuk konfirmasi akun sebelum login."
-        );
-
-        setAuthMode("login");
-        setPassword("");
-
-        return;
-      }
-
-      /*
-        Jika email confirmation tidak aktif,
-        user langsung login.
-      */
-
-      if (data.user) {
-        await loadProfile(data.user);
-        setPage("dashboard");
-      }
-
-      setMessage("Akun berhasil dibuat.");
-    } catch (err) {
-      console.error(err);
-      setError("Terjadi kesalahan saat membuat akun.");
-    } finally {
-      setAuthLoading(false);
-    }
-  };
-
-  /* =======================================================
-     LOGOUT
-  ======================================================= */
-
-  const handleLogout = async () => {
-    if (!supabase) return;
-
-    await supabase.auth.signOut();
-
-    setSession(null);
-    setProfile(null);
-    setPage("dashboard");
-    setEmail("");
-    setPassword("");
-    setName("");
-    setError("");
-    setMessage("");
-  };
-
-  /* =======================================================
-     COPY
-  ======================================================= */
-
-  const copyText = async (text) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setMessage("Berhasil disalin.");
+      setBalance(result.data?.balance ?? 0);
     } catch {
-      setError("Tidak dapat menyalin.");
+      setBalance(null);
     }
-  };
-
-  /* =======================================================
-     LOADING
-  ======================================================= */
-
-  if (loading) {
-    return (
-      <div className="splash">
-        <div className="brand-mark">N</div>
-        <strong>NOKOS</strong>
-        <span>Memuat aplikasi...</span>
-      </div>
-    );
   }
 
-  /* =======================================================
-     AUTH PAGE
-  ======================================================= */
+  useEffect(() => {
+    loadBalance();
+  }, []);
 
-  if (!session) {
-    return (
-      <div className="auth-page">
-        <div className="auth-glow glow-a" />
-        <div className="auth-glow glow-b" />
+  // =========================
+  // LOAD PRICE
+  // =========================
 
-        <div className="auth-card">
-          <div className="side-brand">
-            <div className="brand-mark">N</div>
+  async function loadPrice() {
+    if (!service || !country) return;
 
-            <div>
-              <strong>NOKOS</strong>
-              <small>VIRTUAL NUMBER PLATFORM</small>
-            </div>
-          </div>
+    try {
+      setLoadingPrice(true);
+      setError("");
 
-          <div className="auth-copy">
-            <span className="eyebrow">
-              {authMode === "login" ? "WELCOME BACK" : "CREATE ACCOUNT"}
-            </span>
+      const result = await api(
+        `/api/prices?service=${encodeURIComponent(
+          service
+        )}&country=${encodeURIComponent(
+          country
+        )}&server=${encodeURIComponent(server)}`
+      );
 
-            <h1>
-              {authMode === "login"
-                ? "Masuk ke NOKOS"
-                : "Buat akun NOKOS"}
-            </h1>
+      const countryData =
+        result.data?.[String(country)] ||
+        result.data?.[country] ||
+        {};
 
-            <p>
-              {authMode === "login"
-                ? "Masuk untuk mengelola saldo, nomor virtual, OTP, dan API."
-                : "Daftar untuk mulai menggunakan layanan nomor virtual NOKOS."}
-            </p>
-          </div>
+      const serviceData = countryData?.[service];
 
-          {error && <div className="alert error">{error}</div>}
+      if (!serviceData) {
+        setPrice(null);
+        return;
+      }
 
-          {message && (
-            <div className="success-badge">
-              ✓ {message}
-            </div>
-          )}
-
-          <form
-            className="auth-form"
-            onSubmit={
-              authMode === "login"
-                ? handleLogin
-                : handleRegister
-            }
-          >
-            {authMode === "register" && (
-              <label>
-                Nama
-                <input
-                  type="text"
-                  placeholder="Nama kamu"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  autoComplete="name"
-                />
-              </label>
-            )}
-
-            <label>
-              Email
-              <input
-                type="email"
-                placeholder="email@example.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                autoComplete="email"
-              />
-            </label>
-
-            <label>
-              Password
-              <input
-                type="password"
-                placeholder="Minimal 6 karakter"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                autoComplete={
-                  authMode === "login"
-                    ? "current-password"
-                    : "new-password"
-                }
-              />
-            </label>
-
-            <button
-              className="btn primary full"
-              type="submit"
-              disabled={authLoading}
-            >
-              {authLoading
-                ? "Memproses..."
-                : authMode === "login"
-                ? "Masuk"
-                : "Daftar Sekarang"}
-            </button>
-          </form>
-
-          <button
-            className="text-btn"
-            type="button"
-            onClick={() => {
-              setAuthMode(
-                authMode === "login"
-                  ? "register"
-                  : "login"
-              );
-
-              setError("");
-              setMessage("");
-            }}
-          >
-            {authMode === "login"
-              ? "Belum punya akun? Daftar"
-              : "Sudah punya akun? Login"}
-          </button>
-        </div>
-      </div>
-    );
+      setPrice(serviceData);
+    } catch (err) {
+      setPrice(null);
+      setError(err.message);
+    } finally {
+      setLoadingPrice(false);
+    }
   }
 
-  /* =======================================================
-     DASHBOARD
-  ======================================================= */
+  useEffect(() => {
+    loadPrice();
+  }, [service, country, server]);
 
-  const displayName =
-    profile?.name ||
-    session.user.user_metadata?.name ||
-    session.user.email?.split("@")[0] ||
-    "User";
+  // =========================
+  // ORDER NUMBER
+  // =========================
 
-  const balance = profile?.balance || 0;
+  async function buyNumber() {
+    if (!service) {
+      setError("Pilih layanan terlebih dahulu.");
+      return;
+    }
 
-  /* =======================================================
-     SIDEBAR
-  ======================================================= */
+    try {
+      setOrdering(true);
+      setError("");
+      setNotice("");
+      setOrder(null);
+      setStatus(null);
 
-  const nav = [
+      const result = await api("/api/order", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          service,
+          country,
+          operator,
+          server,
+        }),
+      });
+
+      setOrder(result.data);
+
+      setNotice("Nomor berhasil dipesan.");
+
+      loadBalance();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setOrdering(false);
+    }
+  }
+
+  // =========================
+  // CHECK STATUS
+  // =========================
+
+  async function checkStatus(showLoading = true) {
+    if (!order?.activation_id) return;
+
+    try {
+      if (showLoading) setCheckingStatus(true);
+
+      const result = await api(
+        `/api/status?id=${encodeURIComponent(
+          order.activation_id
+        )}`
+      );
+
+      setStatus(result.data);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      if (showLoading) setCheckingStatus(false);
+    }
+  }
+
+  // =========================
+  // AUTO POLLING OTP
+  // =========================
+
+  useEffect(() => {
+    if (!order?.activation_id) return;
+
+    if (status?.status === "STATUS_OK") return;
+
+    const timer = setInterval(() => {
+      checkStatus(false);
+    }, 4000);
+
+    return () => clearInterval(timer);
+  }, [order?.activation_id, status?.status]);
+
+  // =========================
+  // COPY
+  // =========================
+
+  async function copyText(text) {
+    if (!text) return;
+
+    try {
+      await navigator.clipboard.writeText(String(text));
+      setNotice("Berhasil disalin.");
+    } catch {
+      setError("Tidak bisa menyalin otomatis.");
+    }
+  }
+
+  // =========================
+  // RESET ORDER
+  // =========================
+
+  function newOrder() {
+    setOrder(null);
+    setStatus(null);
+    setNotice("");
+    setError("");
+  }
+
+  // =========================
+  // SEARCH SERVICES
+  // =========================
+
+  const filteredServices = useMemo(() => {
+    const keyword = search.trim().toLowerCase();
+
+    if (!keyword) return services;
+
+    return services.filter((item) => {
+      return (
+        String(item.name || "")
+          .toLowerCase()
+          .includes(keyword) ||
+        String(item.code || "")
+          .toLowerCase()
+          .includes(keyword)
+      );
+    });
+  }, [services, search]);
+
+  const selectedService = services.find(
+    (item) => item.code === service
+  );
+
+  const selectedCountry = countries.find(
+    (item) => String(item.id) === String(country)
+  );
+
+  // =========================
+  // SERVICE CARD
+  // =========================
+
+  const quickServices = [
     {
-      id: "dashboard",
-      label: "Dashboard",
-      icon: "⌂",
+      code: "wa",
+      name: "WhatsApp",
+      icon: "W",
     },
     {
-      id: "buy",
-      label: "Beli Nomor",
-      icon: "＋",
+      code: "tg",
+      name: "Telegram",
+      icon: "T",
     },
     {
-      id: "deposit",
-      label: "Top Up",
-      icon: "Rp",
-    },
-    {
-      id: "history",
-      label: "Riwayat",
-      icon: "◷",
-    },
-    {
-      id: "docs",
-      label: "API Documentation",
-      icon: "⌘",
+      code: "oi",
+      name: "Tinder",
+      icon: "O",
     },
   ];
 
   return (
     <div className="app-shell">
-      {sidebarOpen && (
-        <div
-          className="overlay"
-          onClick={() => setSidebarOpen(false)}
-        />
-      )}
 
-      <aside className={`sidebar ${sidebarOpen ? "open" : ""}`}>
+      {/* =========================
+          SIDEBAR
+      ========================= */}
+
+      <aside className={`sidebar ${mobileOpen ? "open" : ""}`}>
+
         <div className="side-brand">
           <div className="brand-mark">N</div>
 
           <div>
             <strong>NOKOS</strong>
-            <small>VIRTUAL NUMBER</small>
+            <small>OTP STORE</small>
           </div>
+
+          <button
+            className="sidebar-close"
+            onClick={() => setMobileOpen(false)}
+          >
+            <X size={18} />
+          </button>
         </div>
 
-        <div className="side-label">MENU</div>
+        <div className="side-label">
+          MENU
+        </div>
 
         <nav>
-          {nav.map((item) => (
-            <button
-              key={item.id}
-              className={page === item.id ? "active" : ""}
-              onClick={() => {
-                setPage(item.id);
-                setSidebarOpen(false);
-                setError("");
-                setMessage("");
-              }}
-            >
-              <span>{item.icon}</span>
-              {item.label}
-            </button>
-          ))}
+          <button
+            className="active"
+            onClick={() => {
+              document
+                .getElementById("home")
+                ?.scrollIntoView({ behavior: "smooth" });
+
+              setMobileOpen(false);
+            }}
+          >
+            <Package size={17} />
+            <span>Beranda</span>
+          </button>
+
+          <button
+            onClick={() => {
+              document
+                .getElementById("buy")
+                ?.scrollIntoView({ behavior: "smooth" });
+
+              setMobileOpen(false);
+            }}
+          >
+            <ShoppingCart size={17} />
+            <span>Beli Nomor</span>
+          </button>
+
+          <button
+            onClick={() => {
+              document
+                .getElementById("services")
+                ?.scrollIntoView({ behavior: "smooth" });
+
+              setMobileOpen(false);
+            }}
+          >
+            <Smartphone size={17} />
+            <span>Layanan</span>
+          </button>
+
+          <button
+            onClick={() => {
+              document
+                .getElementById("order")
+                ?.scrollIntoView({ behavior: "smooth" });
+
+              setMobileOpen(false);
+            }}
+          >
+            <Activity size={17} />
+            <span>Pesanan</span>
+          </button>
         </nav>
 
+        <div className="side-label">
+          STATUS
+        </div>
+
         <div className="side-status">
-          <i className="status-dot" />
+          <span className="status-dot" />
 
           <div>
-            <b>System Online</b>
-            <span>API operational</span>
+            <b>Server Online</b>
+            <span>NOKOS API aktif</span>
           </div>
         </div>
 
-        <button
-          className="logout"
-          onClick={handleLogout}
-        >
-          ↪
-          <span>Logout</span>
-        </button>
+        <div className="sidebar-footer">
+          <ShieldCheck size={14} />
+          <span>Secure API Gateway</span>
+        </div>
+
       </aside>
 
+      {/* MOBILE OVERLAY */}
+
+      {mobileOpen && (
+        <div
+          className="overlay"
+          onClick={() => setMobileOpen(false)}
+        />
+      )}
+
+      {/* =========================
+          MAIN
+      ========================= */}
+
       <main className="main">
+
+        {/* TOPBAR */}
+
         <header className="topbar">
+
           <button
             className="mobile-menu"
-            onClick={() => setSidebarOpen(true)}
+            onClick={() => setMobileOpen(true)}
           >
-            ☰
+            <Menu size={22} />
           </button>
 
           <div className="top-title">
-            <span>NOKOS PANEL</span>
-            <h2>{displayName}</h2>
+            <span>PUBLIC STORE</span>
+            <h2>NOKOS Store</h2>
           </div>
 
           <div className="top-actions">
+
+            <button
+              className="icon-btn"
+              onClick={() => {
+                loadPrice();
+                loadBalance();
+              }}
+              title="Refresh"
+            >
+              <RefreshCw size={16} />
+            </button>
+
             <div className="balance-mini">
+              <Wallet size={15} />
+
               <div>
-                <small>Saldo</small>
-                <b>{formatRupiah(balance)}</b>
+                <small>Saldo API</small>
+
+                <b>
+                  {balance === null
+                    ? "—"
+                    : formatRupiah(balance)}
+                </b>
               </div>
             </div>
+
           </div>
+
         </header>
 
         <div className="content">
-          {error && (
-            <div className="alert error">
-              {error}
+
+          {/* =========================
+              HERO
+          ========================= */}
+
+          <section id="home" className="hero-card">
+
+            <div className="hero-content">
+
+              <span className="eyebrow">
+                NOMOR OTP INSTANT
+              </span>
+
+              <h1>
+                Nomor virtual
+                <br />
+                <span>cepat & murah.</span>
+              </h1>
+
+              <p>
+                Dapatkan nomor virtual untuk WhatsApp,
+                Telegram, dan berbagai layanan lainnya.
+                Harga transparan dengan stok real-time.
+              </p>
+
+              <div className="hero-buttons">
+
+                <button
+                  className="btn primary"
+                  onClick={() =>
+                    document
+                      .getElementById("buy")
+                      ?.scrollIntoView({
+                        behavior: "smooth",
+                      })
+                  }
+                >
+                  <ShoppingCart size={16} />
+                  Beli Nomor
+                  <ArrowRight size={15} />
+                </button>
+
+                <button
+                  className="btn secondary"
+                  onClick={() =>
+                    document
+                      .getElementById("services")
+                      ?.scrollIntoView({
+                        behavior: "smooth",
+                      })
+                  }
+                >
+                  Lihat Layanan
+                </button>
+
+              </div>
+
             </div>
-          )}
 
-          {message && (
-            <div className="success-badge">
-              ✓ {message}
+            <div className="hero-orb">
+              <div className="orb-inner">
+                <Zap size={48} />
+              </div>
             </div>
-          )}
 
-          {/* ===============================================
-              DASHBOARD
-          =============================================== */}
+          </section>
 
-          {page === "dashboard" && (
-            <>
-              <section className="hero-card">
-                <div>
-                  <span className="eyebrow">
-                    VIRTUAL NUMBER PLATFORM
-                  </span>
+          {/* =========================
+              STATS
+          ========================= */}
 
-                  <h1>
-                    Nomor virtual
-                    <br />
-                    <span>lebih mudah.</span>
-                  </h1>
+          <section className="stats-grid">
 
-                  <p>
-                    Kelola nomor virtual, OTP, saldo,
-                    dan API dalam satu dashboard.
-                  </p>
-
-                  <div className="action-row">
-                    <button
-                      className="btn primary"
-                      onClick={() => setPage("buy")}
-                    >
-                      Beli Nomor →
-                    </button>
-
-                    <button
-                      className="btn secondary"
-                      onClick={() => setPage("deposit")}
-                    >
-                      Top Up
-                    </button>
-                  </div>
-                </div>
-
-                <div className="hero-orb">
-                  <div className="brand-mark">N</div>
-                </div>
-              </section>
-
-              <div className="stats-grid">
-                <div className="stat-card">
-                  <div className="stat-icon">Rp</div>
-
-                  <div>
-                    <small>Saldo</small>
-                    <strong>{formatRupiah(balance)}</strong>
-                  </div>
-                </div>
-
-                <div className="stat-card">
-                  <div className="stat-icon">#</div>
-
-                  <div>
-                    <small>API Key</small>
-                    <strong>
-                      {profile?.api_key ? "Aktif" : "Belum ada"}
-                    </strong>
-                  </div>
-                </div>
-
-                <div className="stat-card">
-                  <div className="stat-icon">@</div>
-
-                  <div>
-                    <small>Status</small>
-
-                    <span className="online">
-                      ● {profile?.status || "active"}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="stat-card">
-                  <div className="stat-icon">U</div>
-
-                  <div>
-                    <small>Role</small>
-                    <strong>
-                      {profile?.role || "member"}
-                    </strong>
-                  </div>
-                </div>
+            <div className="stat-card">
+              <div className="stat-icon">
+                <Smartphone size={19} />
               </div>
 
-              <div className="section-head">
-                <span className="eyebrow">QUICK ACTION</span>
-                <h3>Akses cepat</h3>
-              </div>
-
-              <div className="quick-grid">
-                <button
-                  className="quick-card"
-                  onClick={() => setPage("buy")}
-                >
-                  <div className="quick-icon">＋</div>
-
-                  <div>
-                    <b>Beli Nomor</b>
-                    <span>
-                      Order nomor virtual baru
-                    </span>
-                  </div>
-
-                  <span>→</span>
-                </button>
-
-                <button
-                  className="quick-card"
-                  onClick={() => setPage("deposit")}
-                >
-                  <div className="quick-icon">Rp</div>
-
-                  <div>
-                    <b>Top Up Saldo</b>
-                    <span>
-                      Isi saldo menggunakan QRIS
-                    </span>
-                  </div>
-
-                  <span>→</span>
-                </button>
-
-                <button
-                  className="quick-card"
-                  onClick={() => setPage("docs")}
-                >
-                  <div className="quick-icon">⌘</div>
-
-                  <div>
-                    <b>API Documentation</b>
-                    <span>
-                      Integrasikan API NOKOS
-                    </span>
-                  </div>
-
-                  <span>→</span>
-                </button>
-              </div>
-            </>
-          )}
-
-          {/* ===============================================
-              BUY
-          =============================================== */}
-
-          {page === "buy" && (
-            <>
-              <div className="page-title">
-                <span className="eyebrow">
-                  VIRTUAL NUMBER
+              <div>
+                <small>Layanan</small>
+                <strong>
+                  {services.length || "478+"}
+                </strong>
+                <span className="online">
+                  <i /> Tersedia
                 </span>
+              </div>
+            </div>
 
-                <h1>Beli Nomor</h1>
-
-                <p>
-                  Pilih layanan, negara, dan server
-                  untuk mendapatkan nomor virtual.
-                </p>
+            <div className="stat-card">
+              <div className="stat-icon">
+                <Globe2 size={19} />
               </div>
 
-              <div className="buy-layout">
-                <div className="panel">
-                  <div className="panel-head">
+              <div>
+                <small>Negara</small>
+                <strong>
+                  {countries.length || "76+"}
+                </strong>
+                <span className="online">
+                  <i /> Support
+                </span>
+              </div>
+            </div>
+
+            <div className="stat-card">
+              <div className="stat-icon">
+                <Server size={19} />
+              </div>
+
+              <div>
+                <small>Server</small>
+                <strong>2</strong>
+                <span className="online">
+                  <i /> Online
+                </span>
+              </div>
+            </div>
+
+            <div className="stat-card">
+              <div className="stat-icon">
+                <ShieldCheck size={19} />
+              </div>
+
+              <div>
+                <small>Status</small>
+                <strong>ONLINE</strong>
+                <span className="online">
+                  <i /> API Connected
+                </span>
+              </div>
+            </div>
+
+          </section>
+
+          {/* =========================
+              QUICK SERVICES
+          ========================= */}
+
+          <section id="services">
+
+            <div className="section-head">
+              <span className="eyebrow">
+                POPULAR
+              </span>
+
+              <h3>Layanan Populer</h3>
+            </div>
+
+            <div className="quick-grid">
+
+              {quickServices.map((item) => {
+
+                const serviceExists = services.find(
+                  (x) => x.code === item.code
+                );
+
+                return (
+                  <button
+                    key={item.code}
+                    className="quick-card"
+                    onClick={() => {
+                      setService(item.code);
+
+                      document
+                        .getElementById("buy")
+                        ?.scrollIntoView({
+                          behavior: "smooth",
+                        });
+                    }}
+                  >
+
+                    <div className="quick-icon">
+                      {item.icon}
+                    </div>
+
                     <div>
-                      <b>Order nomor</b>
+                      <b>
+                        {serviceExists?.name ||
+                          item.name}
+                      </b>
+
                       <span>
-                        Pilih konfigurasi nomor
+                        {serviceExists
+                          ? "Tersedia sekarang"
+                          : "Pilih untuk mengecek"}
                       </span>
                     </div>
-                  </div>
 
-                  <div className="form-grid">
-                    <label>
-                      Service
-                      <select defaultValue="wa">
-                        <option value="wa">
-                          WhatsApp
-                        </option>
+                    <ArrowRight size={15} />
 
-                        <option value="tg">
-                          Telegram
-                        </option>
+                  </button>
+                );
+              })}
 
-                        <option value="oi">
-                          Tinder
-                        </option>
-                      </select>
-                    </label>
+            </div>
 
-                    <label>
-                      Negara
-                      <select defaultValue="6">
-                        <option value="6">
-                          Indonesia (+62)
-                        </option>
+          </section>
 
-                        <option value="0">
-                          Russia (+7)
-                        </option>
+          {/* =========================
+              BUY PANEL
+          ========================= */}
 
-                        <option value="187">
-                          USA (+1)
-                        </option>
-                      </select>
-                    </label>
+          <section id="buy" className="buy-section">
 
-                    <label>
-                      Server
-                      <select defaultValue="s2">
-                        <option value="s2">
-                          Server Plus
-                        </option>
+            <div className="page-title">
 
-                        <option value="s1">
-                          Server Express
-                        </option>
-                      </select>
-                    </label>
+              <span className="eyebrow">
+                PURCHASE
+              </span>
 
-                    <label>
-                      Operator
-                      <select defaultValue="">
-                        <option value="">
-                          Semua Operator
-                        </option>
+              <h1>Beli Nomor</h1>
 
-                        <option value="telkomsel">
-                          Telkomsel
-                        </option>
+              <p>
+                Pilih layanan, negara dan server.
+                Harga serta stok akan diperbarui
+                secara real-time.
+              </p>
 
-                        <option value="indosat">
-                          Indosat
-                        </option>
+            </div>
 
-                        <option value="xl">
-                          XL
-                        </option>
-                      </select>
-                    </label>
-                  </div>
+            <div className="buy-layout">
 
-                  <div className="availability">
-                    <div>
-                      <span>Harga</span>
-                      <strong>Rp -</strong>
-                    </div>
+              {/* FORM */}
 
-                    <div>
-                      <span>Stok</span>
-                      <strong>-</strong>
-                    </div>
+              <div className="panel">
 
-                    <button
-                      className="btn primary"
-                      onClick={() =>
-                        setMessage(
-                          "Fitur order API akan kita hubungkan setelah backend NOKOS selesai."
-                        )
-                      }
-                    >
-                      Cek & Beli
-                    </button>
-                  </div>
-                </div>
+                <div className="panel-head">
 
-                <div className="panel order-result">
-                  <span className="eyebrow">
-                    ORDER RESULT
-                  </span>
-
-                  <div className="empty-panel">
-                    <div>◎</div>
-                    <b>Belum ada nomor</b>
+                  <div>
+                    <b>Konfigurasi Nomor</b>
                     <span>
-                      Nomor yang dibeli akan muncul di sini.
+                      Tentukan nomor yang ingin kamu beli
                     </span>
                   </div>
+
+                  <ShoppingCart size={19} />
+
                 </div>
-              </div>
-            </>
-          )}
 
-          {/* ===============================================
-              DEPOSIT
-          =============================================== */}
+                <div className="form-grid">
 
-          {page === "deposit" && (
-            <>
-              <div className="page-title">
-                <span className="eyebrow">
-                  BALANCE
-                </span>
-
-                <h1>Top Up Saldo</h1>
-
-                <p>
-                  Isi saldo NOKOS menggunakan QRIS.
-                </p>
-              </div>
-
-              <div className="deposit-layout">
-                <div className="panel">
-                  <div className="panel-head">
-                    <div>
-                      <b>Nominal Top Up</b>
-                      <span>
-                        Minimal Rp10.000
-                      </span>
-                    </div>
-                  </div>
+                  {/* SERVICE */}
 
                   <label>
-                    Jumlah
-                    <div className="money-input">
-                      <span>Rp</span>
+                    Layanan
 
-                      <input
-                        type="number"
-                        min="10000"
-                        placeholder="50000"
-                      />
+                    <div className="select-wrap">
+
+                      <select
+                        value={service}
+                        onChange={(e) =>
+                          setService(e.target.value)
+                        }
+                      >
+                        {services.length === 0 ? (
+                          <option value="">
+                            Memuat layanan...
+                          </option>
+                        ) : (
+                          services.map((item) => (
+                            <option
+                              key={item.code}
+                              value={item.code}
+                            >
+                              {item.name} ({item.code})
+                            </option>
+                          ))
+                        )}
+                      </select>
+
+                      <ChevronDown size={14} />
+
                     </div>
                   </label>
 
-                  <div className="preset-grid">
-                    {[10000, 25000, 50000, 100000].map(
-                      (amount) => (
-                        <button
-                          key={amount}
-                          type="button"
-                          onClick={() => {
-                            setMessage(
-                              `Nominal Rp${amount.toLocaleString(
-                                "id-ID"
-                              )} dipilih.`
-                            );
-                          }}
-                        >
-                          Rp
-                          {amount.toLocaleString("id-ID")}
-                        </button>
-                      )
-                    )}
+                  {/* COUNTRY */}
+
+                  <label>
+                    Negara
+
+                    <div className="select-wrap">
+
+                      <select
+                        value={country}
+                        onChange={(e) =>
+                          setCountry(e.target.value)
+                        }
+                      >
+                        {countries.length === 0 ? (
+                          <option value="6">
+                            Memuat negara...
+                          </option>
+                        ) : (
+                          countries.map((item) => (
+                            <option
+                              key={item.id}
+                              value={item.id}
+                            >
+                              {item.name}{" "}
+                              {item.prefix
+                                ? `(${item.prefix})`
+                                : ""}
+                            </option>
+                          ))
+                        )}
+                      </select>
+
+                      <ChevronDown size={14} />
+
+                    </div>
+                  </label>
+
+                  {/* SERVER */}
+
+                  <label>
+                    Server
+
+                    <div className="select-wrap">
+
+                      <select
+                        value={server}
+                        onChange={(e) =>
+                          setServer(e.target.value)
+                        }
+                      >
+                        <option value="s2">
+                          Server Plus · s2
+                        </option>
+
+                        <option value="s1">
+                          Server Express · s1
+                        </option>
+                      </select>
+
+                      <ChevronDown size={14} />
+
+                    </div>
+                  </label>
+
+                  {/* OPERATOR */}
+
+                  <label>
+                    Operator{" "}
+                    <span className="optional">
+                      Optional
+                    </span>
+
+                    <input
+                      value={operator}
+                      onChange={(e) =>
+                        setOperator(e.target.value)
+                      }
+                      placeholder="any / telkomsel / xl"
+                    />
+                  </label>
+
+                </div>
+
+                {/* AVAILABILITY */}
+
+                <div className="availability">
+
+                  <div>
+                    <span>Harga API</span>
+
+                    <strong>
+                      {loadingPrice
+                        ? "..."
+                        : formatRupiah(
+                            price?.api_price
+                          )}
+                    </strong>
+                  </div>
+
+                  <div>
+                    <span>Harga Jual</span>
+
+                    <strong className="sell-price">
+                      {loadingPrice
+                        ? "..."
+                        : formatRupiah(
+                            price?.sell_price
+                          )}
+                    </strong>
                   </div>
 
                   <button
-                    className="btn primary full"
+                    className="btn primary"
+                    disabled={
+                      ordering ||
+                      !price ||
+                      Number(price.stock) <= 0
+                    }
+                    onClick={buyNumber}
+                  >
+                    {ordering ? (
+                      <>
+                        <RefreshCw
+                          size={15}
+                          className="spin"
+                        />
+                        Memproses...
+                      </>
+                    ) : (
+                      <>
+                        <ShoppingCart size={15} />
+                        Beli Nomor
+                      </>
+                    )}
+                  </button>
+
+                </div>
+
+                {price && (
+                  <div className="price-info">
+
+                    <span>
+                      Markup
+                    </span>
+
+                    <b>
+                      {formatRupiah(
+                        price.markup
+                      )}
+                    </b>
+
+                    <span>
+                      Stok
+                    </span>
+
+                    <b>
+                      {Number(
+                        price.stock || 0
+                      ).toLocaleString(
+                        "id-ID"
+                      )}
+                    </b>
+
+                  </div>
+                )}
+
+                {error && (
+                  <div className="alert error">
+                    {error}
+                  </div>
+                )}
+
+                {notice && (
+                  <div className="alert success">
+                    <CheckCircle2 size={14} />
+                    {notice}
+                  </div>
+                )}
+
+              </div>
+
+              {/* INFO */}
+
+              <div className="panel order-info-panel">
+
+                <div className="panel-head">
+
+                  <div>
+                    <b>
+                      Informasi Pembelian
+                    </b>
+
+                    <span>
+                      Harga otomatis dari API
+                    </span>
+                  </div>
+
+                  <CircleDollarSign
+                    size={19}
+                  />
+
+                </div>
+
+                <div className="info-list">
+
+                  <div>
+                    <span>Service</span>
+                    <b>
+                      {selectedService?.name ||
+                        service ||
+                        "-"}
+                    </b>
+                  </div>
+
+                  <div>
+                    <span>Negara</span>
+                    <b>
+                      {selectedCountry?.name ||
+                        "-"}
+                    </b>
+                  </div>
+
+                  <div>
+                    <span>Server</span>
+                    <b>
+                      {server === "s2"
+                        ? "Plus · s2"
+                        : "Express · s1"}
+                    </b>
+                  </div>
+
+                  <div>
+                    <span>Harga API</span>
+                    <b>
+                      {formatRupiah(
+                        price?.api_price
+                      )}
+                    </b>
+                  </div>
+
+                  <div>
+                    <span>Markup</span>
+                    <b>
+                      {formatRupiah(
+                        price?.markup
+                      )}
+                    </b>
+                  </div>
+
+                  <div className="total-row">
+                    <span>
+                      Harga pelanggan
+                    </span>
+
+                    <b>
+                      {formatRupiah(
+                        price?.sell_price
+                      )}
+                    </b>
+                  </div>
+
+                </div>
+
+                <div className="secure-note">
+                  <ShieldCheck size={15} />
+
+                  <span>
+                    API key tidak pernah dikirim
+                    ke browser pelanggan.
+                  </span>
+                </div>
+
+              </div>
+
+            </div>
+
+          </section>
+
+          {/* =========================
+              ORDER RESULT
+          ========================= */}
+
+          {order && (
+            <section
+              id="order"
+              className="order-section"
+            >
+
+              <div className="page-title">
+
+                <span className="eyebrow">
+                  ACTIVATION
+                </span>
+
+                <h1>Pesanan Kamu</h1>
+
+                <p>
+                  Pantau status nomor dan tunggu
+                  kode OTP masuk.
+                </p>
+
+              </div>
+
+              <div className="panel order-result">
+
+                <div className="success-badge">
+                  <CheckCircle2 size={14} />
+                  Nomor berhasil dipesan
+                </div>
+
+                <span className="eyebrow">
+                  NOMOR TELEPON
+                </span>
+
+                <div className="phone-box">
+
+                  <Smartphone size={20} />
+
+                  <strong>
+                    +{String(
+                      order.phone || ""
+                    ).replace(/^\\+/, "")}
+                  </strong>
+
+                  <button
+                    className="copy-btn"
                     onClick={() =>
-                      setMessage(
-                        "Integrasi createDeposit akan kita pasang di backend Vercel."
+                      copyText(
+                        `+${String(
+                          order.phone || ""
+                        ).replace(/^\\+/, "")}`
                       )
                     }
+                    title="Copy nomor"
                   >
-                    Buat QRIS
+                    <Copy size={15} />
                   </button>
+
                 </div>
 
-                <div className="panel qr-panel">
-                  <span className="eyebrow">
-                    PAYMENT
-                  </span>
+                <div className="order-meta">
 
-                  <h3>QRIS</h3>
-
-                  <div className="empty-panel">
-                    <div>▦</div>
-                    <b>QR belum dibuat</b>
+                  <div>
                     <span>
-                      QRIS akan muncul setelah transaksi dibuat.
+                      Activation ID
                     </span>
+
+                    <b>
+                      {order.activation_id}
+                    </b>
                   </div>
+
+                  <div>
+                    <span>
+                      Layanan
+                    </span>
+
+                    <b>
+                      {selectedService?.name ||
+                        service}
+                    </b>
+                  </div>
+
+                  <div>
+                    <span>
+                      Negara
+                    </span>
+
+                    <b>
+                      {selectedCountry?.name ||
+                        country}
+                    </b>
+                  </div>
+
+                  <div>
+                    <span>
+                      Harga
+                    </span>
+
+                    <b>
+                      {formatRupiah(
+                        order.price
+                      )}
+                    </b>
+                  </div>
+
+                  <div>
+                    <span>
+                      Expired
+                    </span>
+
+                    <b>
+                      {order.expires_at ||
+                        "-"}
+                    </b>
+                  </div>
+
+                  <div>
+                    <span>
+                      Status
+                    </span>
+
+                    <b className="status-text">
+                      {status?.status ||
+                        "STATUS_WAIT_CODE"}
+                    </b>
+                  </div>
+
                 </div>
-              </div>
-            </>
-          )}
 
-          {/* ===============================================
-              HISTORY
-          =============================================== */}
+                {/* OTP */}
 
-          {page === "history" && (
-            <>
-              <div className="page-title">
-                <span className="eyebrow">
-                  TRANSACTIONS
-                </span>
+                <div
+                  className={`otp-box ${
+                    status?.status ===
+                    "STATUS_OK"
+                      ? "received"
+                      : ""
+                  }`}
+                >
 
-                <h1>Riwayat</h1>
-
-                <p>
-                  Riwayat pembelian nomor dan transaksi saldo.
-                </p>
-              </div>
-
-              <div className="panel">
-                <div className="empty-panel">
-                  <div>◷</div>
-                  <b>Belum ada riwayat</b>
                   <span>
-                    Transaksi kamu akan muncul di sini.
+                    VERIFICATION CODE
                   </span>
+
+                  <strong>
+                    {status?.code ||
+                      "— — — — — —"}
+                  </strong>
+
+                  {status?.code && (
+                    <button
+                      className="copy-btn"
+                      onClick={() =>
+                        copyText(
+                          status.code
+                        )
+                      }
+                    >
+                      <Copy size={14} />
+                    </button>
+                  )}
+
                 </div>
+
+                {status?.sms && (
+                  <div className="sms-box">
+                    <span>SMS</span>
+                    <p>
+                      {status.sms}
+                    </p>
+                  </div>
+                )}
+
+                <div className="action-row">
+
+                  <button
+                    className="btn primary"
+                    onClick={() =>
+                      checkStatus(true)
+                    }
+                    disabled={
+                      checkingStatus
+                    }
+                  >
+                    <RefreshCw
+                      size={14}
+                      className={
+                        checkingStatus
+                          ? "spin"
+                          : ""
+                      }
+                    />
+
+                    {checkingStatus
+                      ? "Mengecek..."
+                      : "Cek OTP"}
+                  </button>
+
+                  <button
+                    className="btn secondary"
+                    onClick={newOrder}
+                  >
+                    <ShoppingCart size={14} />
+                    Nomor Baru
+                  </button>
+
+                </div>
+
               </div>
-            </>
+
+            </section>
           )}
 
-          {/* ===============================================
-              DOCUMENTATION
-          =============================================== */}
+          {/* =========================
+              SERVICE LIST
+          ========================= */}
 
-          {page === "docs" && (
-            <>
-              <div className="page-title">
+          <section className="services-section">
+
+            <div className="section-head service-heading">
+
+              <div>
                 <span className="eyebrow">
-                  DEVELOPER
+                  CATALOG
                 </span>
 
-                <h1>API Documentation</h1>
-
-                <p>
-                  Integrasikan REST API NOKOS ke website,
-                  bot, aplikasi, atau sistem reseller kamu.
-                </p>
+                <h3>
+                  Semua Layanan
+                </h3>
               </div>
 
-              <div className="docs-grid">
-                <div className="panel">
-                  <div className="doc-title">
-                    <b>Authentication</b>
-                  </div>
+              <div className="search">
 
-                  <p>
-                    Semua request API menggunakan API Key
-                    melalui HTTP Header.
-                  </p>
+                <Search size={14} />
 
-                  <div className="code">
-                    <button
-                      className="copy-btn"
-                      onClick={() =>
-                        copyText(
-                          "X-API-Key: YOUR_API_KEY"
-                        )
-                      }
-                    >
-                      ⧉
-                    </button>
+                <input
+                  value={search}
+                  onChange={(e) =>
+                    setSearch(
+                      e.target.value
+                    )
+                  }
+                  placeholder="Cari layanan..."
+                />
 
-                    <pre>
-{`X-API-Key: YOUR_API_KEY`}
-                    </pre>
-                  </div>
-                </div>
-
-                <div className="panel">
-                  <div className="doc-title">
-                    <b>Base URL</b>
-                  </div>
-
-                  <div className="code">
-                    <button
-                      className="copy-btn"
-                      onClick={() =>
-                        copyText(
-                          "https://nokos.co.id/api/?action="
-                        )
-                      }
-                    >
-                      ⧉
-                    </button>
-
-                    <pre>
-{`https://nokos.co.id/api/?action=`}
-                    </pre>
-                  </div>
-                </div>
               </div>
 
-              <div className="panel">
-                <div className="doc-title">
-                  <b>Endpoints</b>
-                </div>
+            </div>
 
-                {[
-                  ["GET", "getBalance", "Cek saldo"],
-                  ["GET", "getServices", "List layanan"],
-                  ["GET", "getCountries", "List negara"],
-                  ["GET", "getPrices", "Cek harga"],
-                  [
-                    "GET",
-                    "getAvailability",
-                    "Cek stok",
-                  ],
-                  [
-                    "POST",
-                    "getNumber",
-                    "Order nomor",
-                  ],
-                  [
-                    "GET",
-                    "getStatus",
-                    "Cek status OTP",
-                  ],
-                  [
-                    "POST",
-                    "setStatus",
-                    "Update status",
-                  ],
-                  [
-                    "POST",
-                    "cancelActivation",
-                    "Cancel nomor",
-                  ],
-                  [
-                    "GET",
-                    "getHistory",
-                    "Riwayat aktivasi",
-                  ],
-                  [
-                    "POST",
-                    "createDeposit",
-                    "Buat QRIS",
-                  ],
-                  [
-                    "GET",
-                    "checkDeposit",
-                    "Cek deposit",
-                  ],
-                ].map(([method, endpoint, description]) => (
-                  <div
-                    className="endpoint"
-                    key={endpoint}
-                  >
-                    <span
-                      className={`method ${
-                        method === "POST"
-                          ? "post"
+            <div className="service-list">
+
+              {filteredServices
+                .slice(0, 100)
+                .map((item) => {
+
+                  const active =
+                    item.code === service;
+
+                  return (
+                    <button
+                      key={item.code}
+                      className={`service-item ${
+                        active
+                          ? "selected"
                           : ""
                       }`}
+                      onClick={() => {
+                        setService(
+                          item.code
+                        );
+
+                        document
+                          .getElementById(
+                            "buy"
+                          )
+                          ?.scrollIntoView({
+                            behavior:
+                              "smooth",
+                          });
+                      }}
                     >
-                      {method}
-                    </span>
 
-                    <b>{endpoint}</b>
+                      <div className="service-icon">
+                        <Smartphone
+                          size={16}
+                        />
+                      </div>
 
-                    <span>{description}</span>
-                  </div>
-                ))}
+                      <div>
+                        <b>
+                          {item.name}
+                        </b>
+
+                        <span>
+                          {item.code}
+                        </span>
+                      </div>
+
+                      <ArrowRight
+                        size={14}
+                      />
+
+                    </button>
+                  );
+                })}
+
+              {filteredServices.length ===
+                0 && (
+                <div className="center">
+                  Tidak ada layanan ditemukan.
+                </div>
+              )}
+
+            </div>
+
+          </section>
+
+          {/* FOOTER */}
+
+          <footer className="footer">
+
+            <div className="footer-brand">
+
+              <div className="brand-mark">
+                N
               </div>
-            </>
-          )}
+
+              <div>
+                <b>NOKOS STORE</b>
+                <span>
+                  Virtual Number Platform
+                </span>
+              </div>
+
+            </div>
+
+            <div>
+              © {new Date().getFullYear()} NOKOS
+              Store
+            </div>
+
+          </footer>
+
         </div>
       </main>
     </div>
   );
 }
+
+export default App;
